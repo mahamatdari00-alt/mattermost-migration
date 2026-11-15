@@ -70,11 +70,15 @@ jobs:
         run: |
           New-Item -ItemType File -Path "$HOME\.mattermost_migration_completed" -Force
 
-      # 6. Deploy the Upgraded Stack
+      # 6. Deploy the Upgraded Stack (With cleanup of old containers)
       - name: Deploy Upgraded Stack
         shell: powershell
         run: |
           Write-Host "Launching Upgraded Mattermost Stack..."
+          # Stop the old legacy stack so the name "mattermost" is free
+          docker compose -f legacy\docker-compose.yml down --remove-orphans
+          
+          # Start the new stack
           docker compose -f $env:COMPOSE_FILE up -d --build --remove-orphans
           Write-Host "Waiting for Mattermost to apply internal database updates..."
           Start-Sleep -Seconds 30
