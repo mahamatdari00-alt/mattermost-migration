@@ -38,11 +38,12 @@ jobs:
           docker exec mattermost-mysql mysqldump -u root -pMM_ROOT_PASSWORD mattermost > backup_${{ github.run_id }}.sql
           Write-Host "Backup successfully saved!"
 
-      # 3. Start New PostgreSQL
+      # 3. Ensure Network Exists & Start PostgreSQL
       - name: Start Target PostgreSQL
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
         run: |
+          docker network create mattermost_network 2>$null
           docker compose -f $env:COMPOSE_FILE up -d db-postgres
           Write-Host "Waiting for PostgreSQL to initialize..."
           Start-Sleep -Seconds 10
