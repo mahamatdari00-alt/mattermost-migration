@@ -1,0 +1,86 @@
+﻿name: Idempotent Mattermost Migration & Upgrade
+
+on:
+  push:
+    branches: [ "migration" ]
+  workflow_dispatch:
+
+env:
+  COMPOSE_FILE: docker-compose.prod.yml
+
+jobs:
+  migrate-and-deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. Check Idempotency
+      - name: Check Migration Status
+        id: check_status
+        shell: bash
+        run: |
+          if [ -f "/home/runner/.mattermost_migration_completed" ] || [ -f "$HOME/.mattermost_migration_completed" ]; then
+            echo "Database already migrated. Skipping."
+            echo "already_migrated=true" >> $GITHUB_OUTPUT
+          else
+            echo "Migration required."
+            echo "already_migrated=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 2. Backup MySQL
+      - name: Backup Legacy MySQL
+        if: steps.check_status.outputs.already_migrated == 'false'
+        shell: bash
+        run: |
+          echo "Creating timestamped backup of MySQL..."
+          docker exec mattermost-mysql mysqldump -u root -pMM_ROOT_PASSWORD mattermost > backup_${{ github.run_id }}.sql
+          echo "Backup successfully saved!"
+
+      # 3. Start New PostgreSQL
+      - name: Start Target PostgreSQL
+        if: steps.check_status.outputs.already_migrated == 'false'
+        shell: bash
+        run: |
+          docker compose -f $COMPOSE_FILE up -d db-postgres
+          echo "Waiting for PostgreSQL to initialize..."
+          sleep 10
+
+      # 4. Run pgloader
+      - name: Run pgloader (With Schema Drop)
+        if: steps.check_status.outputs.already_migrated == 'false'
+        shell: bash
+        run: |
+          docker run --rm --network=mattermost_network mattermost/mattermost-pgloader:latest pgloader \
+            --with "include drop" \
+            mysql://root:MM_ROOT_PASSWORD@mattermost-mysql/mattermost \
+            postgresql://postgres:MM_POSTGRES_PASSWORD@mattermost-postgres/mattermost
+
+      # 5. Mark Migration as Complete
+      - name: Mark Migration as Completed
+        if: steps.check_status.outputs.already_migrated == 'false'
+        shell: bash
+        run: touch $HOME/.mattermost_migration_completed
+
+      # 6. Deploy the Upgraded Stack
+      - name: Deploy Upgraded Stack
+        shell: bash
+        run: |
+          echo "Launching Upgraded Mattermost Stack..."
+          docker compose -f $COMPOSE_FILE up -d --build --remove-orphans
+          echo "Waiting for Mattermost to apply internal database updates..."
+          sleep 30
+
+      # 7. Health Checks
+      - name: Run Health Checks & Verify Data
+        shell: bash
+        run: |
+          echo "Running Smoke Tests..."
+          if curl -f http://localhost:8065/api/v4/system/ping; then
+            echo "Mattermost upgraded successfully and running on Postgres!"
+          else
+            echo "Application health check failed. Fetching logs..."
+            docker compose -f $COMPOSE_FILE logs
+            exit 1
+          fi
