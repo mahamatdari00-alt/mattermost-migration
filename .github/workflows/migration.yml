@@ -19,68 +19,70 @@ jobs:
       # 1. Check Idempotency
       - name: Check Migration Status
         id: check_status
-        shell: bash
+        shell: powershell
         run: |
-          if [ -f "/home/runner/.mattermost_migration_completed" ] || [ -f "$HOME/.mattermost_migration_completed" ]; then
-            echo "Database already migrated. Skipping."
-            echo "already_migrated=true" >> $GITHUB_OUTPUT
-          else
-            echo "Migration required."
-            echo "already_migrated=false" >> $GITHUB_OUTPUT
-          fi
+          if (Test-Path "$HOME\.mattermost_migration_completed") {
+            Write-Host "Database already migrated. Skipping."
+            "already_migrated=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            Write-Host "Migration required."
+            "already_migrated=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
 
       # 2. Backup MySQL
       - name: Backup Legacy MySQL
         if: steps.check_status.outputs.already_migrated == 'false'
-        shell: bash
+        shell: powershell
         run: |
-          echo "Creating timestamped backup of MySQL..."
+          Write-Host "Creating timestamped backup of MySQL..."
           docker exec mattermost-mysql mysqldump -u root -pMM_ROOT_PASSWORD mattermost > backup_${{ github.run_id }}.sql
-          echo "Backup successfully saved!"
+          Write-Host "Backup successfully saved!"
 
       # 3. Start New PostgreSQL
       - name: Start Target PostgreSQL
         if: steps.check_status.outputs.already_migrated == 'false'
-        shell: bash
+        shell: powershell
         run: |
-          docker compose -f $COMPOSE_FILE up -d db-postgres
-          echo "Waiting for PostgreSQL to initialize..."
-          sleep 10
+          docker compose -f $env:COMPOSE_FILE up -d db-postgres
+          Write-Host "Waiting for PostgreSQL to initialize..."
+          Start-Sleep -Seconds 10
 
       # 4. Run pgloader
       - name: Run pgloader (With Schema Drop)
         if: steps.check_status.outputs.already_migrated == 'false'
-        shell: bash
+        shell: powershell
         run: |
-          docker run --rm --network=mattermost_network mattermost/mattermost-pgloader:latest pgloader \
-            --with "include drop" \
-            mysql://root:MM_ROOT_PASSWORD@mattermost-mysql/mattermost \
+          docker run --rm --network=mattermost_network mattermost/mattermost-pgloader:latest pgloader `
+            --with "include drop" `
+            mysql://root:MM_ROOT_PASSWORD@mattermost-mysql/mattermost `
             postgresql://postgres:MM_POSTGRES_PASSWORD@mattermost-postgres/mattermost
 
       # 5. Mark Migration as Complete
       - name: Mark Migration as Completed
         if: steps.check_status.outputs.already_migrated == 'false'
-        shell: bash
-        run: touch $HOME/.mattermost_migration_completed
+        shell: powershell
+        run: |
+          New-Item -ItemType File -Path "$HOME\.mattermost_migration_completed" -Force
 
       # 6. Deploy the Upgraded Stack
       - name: Deploy Upgraded Stack
-        shell: bash
+        shell: powershell
         run: |
-          echo "Launching Upgraded Mattermost Stack..."
-          docker compose -f $COMPOSE_FILE up -d --build --remove-orphans
-          echo "Waiting for Mattermost to apply internal database updates..."
-          sleep 30
+          Write-Host "Launching Upgraded Mattermost Stack..."
+          docker compose -f $env:COMPOSE_FILE up -d --build --remove-orphans
+          Write-Host "Waiting for Mattermost to apply internal database updates..."
+          Start-Sleep -Seconds 30
 
       # 7. Health Checks
       - name: Run Health Checks & Verify Data
-        shell: bash
+        shell: powershell
         run: |
-          echo "Running Smoke Tests..."
-          if curl -f http://localhost:8065/api/v4/system/ping; then
-            echo "Mattermost upgraded successfully and running on Postgres!"
-          else
-            echo "Application health check failed. Fetching logs..."
-            docker compose -f $COMPOSE_FILE logs
-            exit 1
-          fi
+          Write-Host "Running Smoke Tests..."
+          try {
+              $response = Invoke-RestMethod -Uri "http://localhost:8065/api/v4/system/ping"
+              Write-Host "Mattermost upgraded successfully and running on Postgres!"
+          } catch {
+              Write-Host "Application health check failed. Fetching logs..."
+              docker compose -f $env:COMPOSE_FILE logs
+              exit 1
+          }
