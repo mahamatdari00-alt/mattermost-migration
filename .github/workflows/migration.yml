@@ -16,7 +16,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. Check Idempotency
+      - name: Cleanup Old Containers
+        shell: powershell
+        run: |
+          docker rm -f mattermost mattermost-mysql mattermost-postgres 2>$null
+          docker network prune -f
+
       - name: Check Migration Status
         id: check_status
         shell: powershell
@@ -29,81 +34,59 @@ jobs:
             "already_migrated=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
 
-      # 2. Backup MySQL
       - name: Backup Legacy MySQL
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
         run: |
-          Write-Host "Cleaning up old containers..."
-          docker rm -f mattermost mattermost-mysql mattermost-postgres 2>$null
-          docker network prune -f
-          
-          Write-Host "Creating timestamped backup of MySQL..."
-          docker compose -f legacy\docker-compose.yml up -d --remove-orphans
+          docker compose -f legacy\docker-compose.yml up -d
           Start-Sleep -Seconds 15
-          
           docker exec mattermost-mysql mysqldump -u root -pMM_ROOT_PASSWORD mattermost > backup_${{ github.run_id }}.sql
-          Write-Host "Backup successfully saved!"
 
-      # 3. Start Target PostgreSQL
       - name: Start Target PostgreSQL
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
         run: |
           docker compose -f $env:COMPOSE_FILE up -d db-postgres
-          Write-Host "Waiting for PostgreSQL to initialize..."
           Start-Sleep -Seconds 10
 
-      # 4. Run pgloader
-      - name: Run pgloader (With Schema Drop)
+      - name: Run pgloader (Using Legacy Network)
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
         run: |
-          docker run --rm --network=legacy_mattermost_network mattermost/mattermost-pgloader:latest pgloader `
+          # Find the exact network Docker created for legacy
+          $networkName = docker inspect mattermost-mysql -f "{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}"
+          Write-Host "Using Network: $networkName"
+          
+          docker run --rm --network=$networkName mattermost/mattermost-pgloader:latest pgloader `
             --with "include drop" `
             mysql://root:MM_ROOT_PASSWORD@mattermost-mysql/mattermost `
             postgresql://postgres:MM_POSTGRES_PASSWORD@mattermost-postgres/mattermost
 
-      # 5. Mark Migration as Complete
       - name: Mark Migration as Completed
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
         run: |
           New-Item -ItemType File -Path "$HOME\.mattermost_migration_completed" -Force
 
-      # 6. Deploy the Upgraded Stack
       - name: Deploy Upgraded Stack
         shell: powershell
         run: |
-          Write-Host "Stopping old Mattermost app..."
           docker stop mattermost 2>$null
           docker rm mattermost 2>$null
-          
-          Write-Host "Launching Upgraded Mattermost Stack..."
           docker compose -f $env:COMPOSE_FILE up -d --build --remove-orphans
-          Write-Host "Waiting for Mattermost to apply internal database updates..."
           Start-Sleep -Seconds 30
 
-      # 7. Health Checks
       - name: Run Health Checks & Verify Data
         shell: powershell
         run: |
-          Write-Host "Running Smoke Tests..."
           $success = $false
           for ($i=1; $i -le 5; $i++) {
-              Write-Host "Attempt $i of 5..."
               try {
                   $response = Invoke-RestMethod -Uri "http://localhost:8065/api/v4/system/ping" -ErrorAction Stop
-                  Write-Host "Mattermost upgraded successfully and running on Postgres!"
                   $success = $true
                   break
               } catch {
-                  Write-Host "Mattermost is still starting up. Waiting 20 seconds..."
                   Start-Sleep -Seconds 20
               }
           }
-          if (-not $success) {
-              Write-Host "Application health check failed after 5 attempts. Fetching logs..."
-              docker compose -f $env:COMPOSE_FILE logs
-              exit 1
-          }
+          if (-not $success) { exit 1 }
