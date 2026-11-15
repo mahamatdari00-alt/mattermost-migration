@@ -35,6 +35,9 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Creating timestamped backup of MySQL..."
+          # Ensure legacy stack is running
+          docker compose -f legacy\docker-compose.yml up -d
+          Start-Sleep -Seconds 5
           docker exec mattermost-mysql mysqldump -u root -pMM_ROOT_PASSWORD mattermost > backup_${{ github.run_id }}.sql
           Write-Host "Backup successfully saved!"
 
@@ -70,12 +73,15 @@ jobs:
         run: |
           New-Item -ItemType File -Path "$HOME\.mattermost_migration_completed" -Force
 
-      # 6. Deploy the Upgraded Stack
+      # 6. Deploy the Upgraded Stack (Only stop the legacy Mattermost app, keep MySQL alive)
       - name: Deploy Upgraded Stack
         shell: powershell
         run: |
+          Write-Host "Stopping old Mattermost app..."
+          docker stop mattermost 2>$null
+          docker rm mattermost 2>$null
+          
           Write-Host "Launching Upgraded Mattermost Stack..."
-          docker compose -f legacy\docker-compose.yml down --remove-orphans
           docker compose -f $env:COMPOSE_FILE up -d --build --remove-orphans
           Write-Host "Waiting for Mattermost to apply internal database updates..."
           Start-Sleep -Seconds 30
