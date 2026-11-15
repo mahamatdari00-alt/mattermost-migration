@@ -34,17 +34,18 @@ jobs:
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
         run: |
-          Write-Host "Cleaning up old networks..."
+          Write-Host "Cleaning up old containers..."
+          docker rm -f mattermost mattermost-mysql mattermost-postgres 2>$null
           docker network prune -f
           
           Write-Host "Creating timestamped backup of MySQL..."
           docker compose -f legacy\docker-compose.yml up -d --remove-orphans
-          Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 15
           
           docker exec mattermost-mysql mysqldump -u root -pMM_ROOT_PASSWORD mattermost > backup_${{ github.run_id }}.sql
           Write-Host "Backup successfully saved!"
 
-      # 3. Start Target PostgreSQL (using the legacy network)
+      # 3. Start Target PostgreSQL
       - name: Start Target PostgreSQL
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
@@ -53,7 +54,7 @@ jobs:
           Write-Host "Waiting for PostgreSQL to initialize..."
           Start-Sleep -Seconds 10
 
-      # 4. Run pgloader (Connecting to the legacy network)
+      # 4. Run pgloader
       - name: Run pgloader (With Schema Drop)
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
@@ -83,7 +84,7 @@ jobs:
           Write-Host "Waiting for Mattermost to apply internal database updates..."
           Start-Sleep -Seconds 30
 
-      # 7. Health Checks (Retry up to 5 times)
+      # 7. Health Checks
       - name: Run Health Checks & Verify Data
         shell: powershell
         run: |
