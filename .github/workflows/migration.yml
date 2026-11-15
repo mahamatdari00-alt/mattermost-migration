@@ -43,7 +43,12 @@ jobs:
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
         run: |
-          docker network create mattermost_network 2>$null
+          $netExists = docker network ls --filter name=mattermost_network -q
+          if (-not $netExists) {
+              docker network create mattermost_network
+          } else {
+              Write-Host "Network mattermost_network already exists."
+          }
           docker compose -f $env:COMPOSE_FILE up -d db-postgres
           Write-Host "Waiting for PostgreSQL to initialize..."
           Start-Sleep -Seconds 10
