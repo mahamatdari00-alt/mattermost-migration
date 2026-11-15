@@ -70,29 +70,36 @@ jobs:
         run: |
           New-Item -ItemType File -Path "$HOME\.mattermost_migration_completed" -Force
 
-      # 6. Deploy the Upgraded Stack (With cleanup of old containers)
+      # 6. Deploy the Upgraded Stack
       - name: Deploy Upgraded Stack
         shell: powershell
         run: |
           Write-Host "Launching Upgraded Mattermost Stack..."
-          # Stop the old legacy stack so the name "mattermost" is free
           docker compose -f legacy\docker-compose.yml down --remove-orphans
-          
-          # Start the new stack
           docker compose -f $env:COMPOSE_FILE up -d --build --remove-orphans
           Write-Host "Waiting for Mattermost to apply internal database updates..."
           Start-Sleep -Seconds 30
 
-      # 7. Health Checks
+      # 7. Health Checks (Retry up to 5 times)
       - name: Run Health Checks & Verify Data
         shell: powershell
         run: |
           Write-Host "Running Smoke Tests..."
-          try {
-              $response = Invoke-RestMethod -Uri "http://localhost:8065/api/v4/system/ping"
-              Write-Host "Mattermost upgraded successfully and running on Postgres!"
-          } catch {
-              Write-Host "Application health check failed. Fetching logs..."
+          $success = $false
+          for ($i=1; $i -le 5; $i++) {
+              Write-Host "Attempt $i of 5..."
+              try {
+                  $response = Invoke-RestMethod -Uri "http://localhost:8065/api/v4/system/ping" -ErrorAction Stop
+                  Write-Host "Mattermost upgraded successfully and running on Postgres!"
+                  $success = $true
+                  break
+              } catch {
+                  Write-Host "Mattermost is still starting up. Waiting 20 seconds..."
+                  Start-Sleep -Seconds 20
+              }
+          }
+          if (-not $success) {
+              Write-Host "Application health check failed after 5 attempts. Fetching logs..."
               docker compose -f $env:COMPOSE_FILE logs
               exit 1
           }
