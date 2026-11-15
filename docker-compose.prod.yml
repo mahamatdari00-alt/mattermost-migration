@@ -12,7 +12,7 @@
       - mattermost_data:/mattermost/data
       - mattermost_logs:/mattermost/logs
     networks:
-      - mattermost_network
+      - legacy_mattermost_network
     depends_on:
       - db-postgres
     restart: unless-stopped
@@ -27,11 +27,11 @@
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - mattermost_network
+      - legacy_mattermost_network
     restart: unless-stopped
 
 networks:
-  mattermost_network:
+  legacy_mattermost_network:
     external: true
 
 volumes:
