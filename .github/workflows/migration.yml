@@ -49,15 +49,11 @@ jobs:
           docker compose -f $env:COMPOSE_FILE up -d db-postgres
           Start-Sleep -Seconds 10
 
-      - name: Run pgloader (Using Legacy Network)
+      - name: Run pgloader (With Schema Drop)
         if: steps.check_status.outputs.already_migrated == 'false'
         shell: powershell
         run: |
-          # Find the exact network Docker created for legacy
-          $networkName = docker inspect mattermost-mysql -f "{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}"
-          Write-Host "Using Network: $networkName"
-          
-          docker run --rm --network=$networkName mattermost/mattermost-pgloader:latest pgloader `
+          docker run --rm --network=legacy_mattermost_network mattermost/mattermost-pgloader:latest pgloader `
             --with "include drop" `
             mysql://root:MM_ROOT_PASSWORD@mattermost-mysql/mattermost `
             postgresql://postgres:MM_POSTGRES_PASSWORD@mattermost-postgres/mattermost
