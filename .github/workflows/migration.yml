@@ -67,8 +67,13 @@ jobs:
       - name: Deploy Upgraded Stack
         shell: powershell
         run: |
-          docker stop mattermost 2>$null
-          docker rm mattermost 2>$null
+          # This line won't crash if the container doesn't exist
+          $oldContainer = docker ps -a -q -f name=^/mattermost$
+          if ($oldContainer) {
+              docker stop mattermost
+              docker rm mattermost
+          }
+          
           docker compose -f $env:COMPOSE_FILE up -d --build --remove-orphans
           Start-Sleep -Seconds 30
 
